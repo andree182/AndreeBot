@@ -1,9 +1,7 @@
-SELECT ?item ?metro_line WHERE {
+SELECT ?item ?has_part ?has_partLabel WHERE {
   SERVICE wikibase:label { bd:serviceParam wikibase:language "[AUTO_LANGUAGE],en". }
   ?item wdt:P31 wd:Q15099348.
   
   FILTER NOT EXISTS { ?item wdt:P527 ?has_part. }
   
-  ?metro_line wdt:P361 ?item.
-  ?metro_line wdt:P31 wd:Q15079663.
 }

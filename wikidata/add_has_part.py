@@ -8,6 +8,7 @@
 
 import pywikibot
 from pywikibot import pagegenerators as pg
+import sys
 
 site = pywikibot.Site("wikidata", "wikidata")
 repo = site.data_repository()
@@ -15,8 +16,11 @@ repo = site.data_repository()
 queryEmptyMetros = open("metros-without-has-parts.sparql").read()
 queryMetroParts = open("metro-parts.sparql").read()
 
-generatorEmptyMetros = pg.WikidataSPARQLPageGenerator(queryEmptyMetros, site=site)
-#TEST: generatorEmptyMetros = [pywikibot.ItemPage(repo, "Q171221")]
+if len(sys.argv) > 1:
+	generatorEmptyMetros = [pywikibot.ItemPage(repo, sys.argv[1])]
+else:
+	generatorEmptyMetros = pg.WikidataSPARQLPageGenerator(queryEmptyMetros, site=site)
+
 for item in generatorEmptyMetros:
 	metroID = item.getID()
 	print("Processing %s" % (metroID))
