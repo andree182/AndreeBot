@@ -11,6 +11,7 @@ import mwparserfromhell
 import subprocess
 import binascii
 import os
+import sys
 
 checkCommits = True
 botName = "AndreeBot"
@@ -30,9 +31,9 @@ def processPage(title):
 	parsed = mwparserfromhell.parse(page.text)
 
 	for template in parsed.filter_templates():
-		if template.name.strip() in validTemplates:
+		if template.name.lower().strip() in validTemplates:
 			paramNames = [param.name.lower().strip() for param in template.params]
-			if 'wikipedia' in paramNames and not 'wikidata' in paramNames:
+			if 'wikipedia' in paramNames and (not 'wikidata' in paramNames or template.params[paramNames.index('wikidata')].value.strip() == ''):
 				# fill it in
 				wIdx = paramNames.index('wikipedia')
 				wikipedia = template.params[wIdx].value.strip()
@@ -113,4 +114,8 @@ def processList(cat):
 				print("Got kicked by someone!")
 				break
 
-processList("Listing_with_Wikipedia_link_but_not_Wikidata_link")
+if len(sys.argv) > 1:
+	for p in sys.argv[1:]:
+		processPage(p)
+else:
+	processList("Listing_with_Wikipedia_link_but_not_Wikidata_link")
