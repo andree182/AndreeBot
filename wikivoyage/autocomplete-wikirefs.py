@@ -28,6 +28,10 @@ def processPage(title):
 	print("\nProcessing %s..." %(title))
 
 	page = pywikibot.Page(site, title)
+	if not page.exists():
+		# Esp. if called from command line...
+		print("Nonexistent page!")
+		return ["Nonexistent page"]
 	parsed = mwparserfromhell.parse(page.text)
 
 	for template in parsed.filter_templates():
