@@ -87,17 +87,17 @@ def processList(cat):
 	counter = 0
 	counterNum = 1
 
-	if not os.path.exists("failed"):
-		open("failed", "w")
+	if not os.path.exists("failed.autocomplete"):
+		open("failed.autocomplete", "w")
 
 	exceptions = {}
 	
-	for l in open("failed", "r").read().split('\n'):
+	for l in open("failed.autocomplete", "r").read().split('\n'):
 		i = l.split('|')
 		if i == ['']:
 			continue
 		exceptions[i[0]] = i[1]
-	exceptionsf = open("failed", "a")
+	exceptionsf = open("failed.autocomplete", "a")
 	
 	cat = pywikibot.Category(site, cat)
 	for a in cat.articles():
