@@ -41,6 +41,7 @@ def processPage(title):
 				# fill it in
 				wIdx = paramNames.index('wikipedia')
 				wikipedia = template.params[wIdx].value.strip()
+				# print(wikipedia)
 				if wikipedia == "":
 					failures += [wikipedia]
 					continue
@@ -59,17 +60,19 @@ def processPage(title):
 
 				witem = pywikibot.ItemPage.fromPage(wpage)
 				wID = witem.getID()
+				# TODO: "Wikipedia" param name breaks this
 				template.add("wikidata", wID, before="wikipedia")
 
 	commit = True
+	newText = str(parsed)
 	if checkCommits:
 		# show diff, filter out most-likely-correct changes
-		newText = str(parsed)
 		open('f.1', 'w').write(page.text)
 		open('f.2', 'w').write(newText)
 		subprocess.call("diff -pdau f.1 f.2 | grep -v '^[-+][-+][-+] f\.[12]'| grep '^[+-]' > f.diff", shell=True)
 		diff = open('f.diff').read().split('\n')
 		diff = list(filter(lambda l: l.strip() != '-}}', diff))
+		diff = list(filter(lambda l: not l.startswith('-| wikipedia=') and not l.startswith('-| wikipedia ='), diff))
 		diff = list(filter(lambda l: not l.startswith('+| wikidata=') and not l.startswith('+| wikidata ='), diff))
 		diff = list(filter(lambda l: l!='', diff))
 
@@ -82,7 +85,7 @@ def processPage(title):
 		page.save("Add wikidata ID(s) derived from wikipedia parameter(s)", botflag = True)
 	return failures
 
-def processList(cat):
+def processList(cat, first):
 	timestamp = pywikibot.Page(site, "User_talk:" + botName).getVersionHistory()[0].timestamp
 	counter = 0
 	counterNum = 1
@@ -106,6 +109,9 @@ def processList(cat):
 			continue
 		if a.title() in exceptions:
 			continue
+		if a.title() < first:
+			continue
+
 		fails = processPage(a.title())
 		if fails != []:
 			exceptionsf.write("%s|%s\n" % (a.title(), ', '.join(fails)))
@@ -118,8 +124,14 @@ def processList(cat):
 				print("Got kicked by someone!")
 				break
 
+if sys.argv[1] == '--first':
+	first = sys.argv[2]
+	sys.argv = sys.argv[2:]
+else:
+	first = ''
+
 if len(sys.argv) > 1:
 	for p in sys.argv[1:]:
 		processPage(p)
 else:
-	processList("Listing_with_Wikipedia_link_but_not_Wikidata_link")
+	processList("Listing_with_Wikipedia_link_but_not_Wikidata_link", first)
