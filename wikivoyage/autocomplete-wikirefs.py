@@ -124,7 +124,7 @@ def processList(cat, first):
 				print("Got kicked by someone!")
 				break
 
-if sys.argv[1] == '--first':
+if len(sys.argv) > 1 and sys.argv[1] == '--first':
 	first = sys.argv[2]
 	sys.argv = sys.argv[2:]
 else:
