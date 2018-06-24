@@ -83,11 +83,43 @@ def transform(parsed):
 				rv = False
 				print("    TODO (!regex.match): ", l)
 		tr += ['\n'.join(res)]
-	newText = ''.join([str(x) for x in tr])
 
 	if not "==Regions==" in found and not "==Cities==" in found and not "==Municipalities==" in found:
 		return False, ["!Missing Regions/Cities/Municipalities"]
-	return rv, newText
+	return rv, ''.join([str(x) for x in tr])
+
+def transformRegions(parsed):
+	tr = []
+	rv = True
+	for s in parsed.get_sections(levels=[2], include_lead = True):
+		if s.filter_headings() == [] or \
+		   s.filter_headings()[0] not in ["==Regions=="]:
+			tr += [s]
+			continue
+
+		tr += ["==Regions==\n"]
+		tr += ["{{Regionlist\n"]
+		tr2 = []
+		idx = 1
+		for l in str(s).split('\n'):
+			if l == '':
+				continue
+			if l.startswith('=='):
+				continue
+			if not re.match("^\* *\{\{marker.*", l):
+				print("Unknown stuff in region list:", l)
+				rv = False
+			t = mwparserfromhell.parse(l).filter_templates()[0]
+
+			tr += ["|region%dname = %s\n|region%dcolor={{StdColor|t%d}}\n|region%ditems=\n|region%ddescription=\n\n" %
+					(idx, t.get('name').value, idx, idx, idx, idx)]
+			tr2 += ["{{mapshape|type=geoshape|fill={{StdColor|t%d}}|title=%s|wikidata=%s}}\n" %
+					(idx, t.get('name').value, t.get('wikidata').value)]
+			idx += 1
+		tr += ["}}\n"]
+		tr += tr2
+
+	return rv, ''.join([str(x) for x in tr])
 
 def processPage(title):
 	failures = []
@@ -101,6 +133,12 @@ def processPage(title):
 	parsed = mwparserfromhell.parse(raw)
 
 	err, newText = transform(parsed)
+	if err != True:
+		print('%s errors:\n\t%s' % (title, '\t\n'.join(newText)))
+		return err
+
+	parsed = mwparserfromhell.parse(newText)
+	err, newText = transformRegions(parsed)
 	if err != True:
 		print('%s errors:\n\t%s' % (title, '\t\n'.join(newText)))
 		return err
