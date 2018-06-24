@@ -80,8 +80,10 @@ def transform(parsed):
 				print("NO LINK    :", l)
 				res += [l]
 			else:
-				rv = False
-				print("    TODO (!regex.match): ", l)
+				print("    ERROR (!regex.match) -> skiping section: ", l)
+				res = str(s).split('\n')
+				break
+
 		tr += ['\n'.join(res)]
 
 	if not "==Regions==" in found and not "==Cities==" in found and not "==Municipalities==" in found:
@@ -108,7 +110,7 @@ def transformRegions(parsed):
 				continue
 			if not re.match("^\* *\{\{marker.*", l):
 				print("Unknown stuff in region list:", l)
-				rv = False
+				return True, str(parsed)
 			t = mwparserfromhell.parse(l).filter_templates()[0]
 
 			tr += ["|region%dname = %s\n|region%dcolor={{StdColor|t%d}}\n|region%ditems=\n|region%ddescription=\n\n" %
@@ -134,13 +136,13 @@ def processPage(title):
 
 	err, newText = transform(parsed)
 	if err != True:
-		print('%s errors:\n\t%s' % (title, '\t\n'.join(newText)))
+		print('%s errors:\n\n%s' % (title, newText))
 		return err
 
 	parsed = mwparserfromhell.parse(newText)
 	err, newText = transformRegions(parsed)
 	if err != True:
-		print('%s errors:\n\t%s' % (title, '\t\n'.join(newText)))
+		print('%s errors:\n\n%s' % (title, newText))
 		return err
 	
 	commit = True
