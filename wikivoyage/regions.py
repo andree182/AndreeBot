@@ -15,6 +15,7 @@ import sys
 import re
 
 checkCommits = True
+fakeWID = False
 botName = "AndreeBot"
 
 site = pywikibot.Site("en", "wikivoyage")
@@ -23,35 +24,70 @@ def transform(parsed):
 	supported_headings = ["==Regions==", "==Cities==", "==Municipalities==", "==Other destinations=="]
 	found = {}
 	hdrs = parsed.filter_headings()
-	match = "^ *\* *(\[\[(?P<ref>[^\]]*)\]\]||(?P<name>[^&—\-\.]*))( *(?P<sep>([—\-\.]|&mdash;)) *(?P<desc>.*)){0,1}$"
+	match = "^(?P<prefix>( *\* *))(\[\[(?P<ref>[^\]]*)\]\]|(?P<name>[^&—\-\.]*))((?P<sep>( *([—\-\.]|&mdash;|) *))(?P<desc>.*)){0,1}$"
+	rv = True
 
-	for s in parsed.get_sections():
-		if s.filter_headings() == []:
-			continue
-		if s.filter_headings()[0] not in supported_headings:
+	nomap = not '{{mapframe' in str(parsed).lower()
+	tr = []
+	for s in parsed.get_sections(levels=[2], include_lead = True):
+		if s.filter_headings() == [] or \
+		   s.filter_headings()[0] not in supported_headings:
+			tr += [s]
 			continue
 		found[str(s.filter_headings()[0])] = True
 		
 		res = []
 		for l in str(s).split('\n'):
 			if l.startswith('==') or l == '':
-				res += l
+				res += [l]
+
+				if l.startswith('==') and 'Cities' in l:
+					markerType = '|type=city'
+					if nomap:
+						res += ["{{mapframe}}"]
+				elif l.startswith('=='):
+					markerType = ''
+				
 				continue
 
 			m = re.match(match, l)
-			if m != None:
-				print("* %s %s %s" % (
-					"[[" + m.group("ref") + "]]" if m.group("ref") else m.group("name"),
-					m.group("sep") if m.group("sep") else '',
-					m.group("desc") if m.group("desc") else ''))
+			if m != None and m.group("ref"):
+				if "[[" in m.group("desc"):
+					print("MULTI-LINK?:", l)
+				title = "[[" + m.group("ref") + "]]" if m.group("ref") else m.group("name")
+				
+				if fakeWID:
+					wdID = 'Q1234'
+				else:
+					wdID = ''
+				if m.group("ref") and wdID == '':
+					# get wikidata for the ref
+					article = m.group("ref")
+					if ('|' in article):
+						article = article[:article.index('|')]
+					page = pywikibot.Page(site, article)
+					if page.isRedirectPage():
+						page = page.getRedirectTarget()
+					if page.pageid != 0:
+						wdID = pywikibot.ItemPage.fromPage(page).getID()
+				
+				res += ['%s{{marker%s|name=%s|wikidata=%s}}%s%s' % (
+					m.group("prefix"),
+					markerType, title, wdID,
+					m.group("sep") if m.group("sep") else ('' if not m.group("desc") else " "),
+					m.group("desc") if m.group("desc") else '')]
+			elif m != None and m.group("name"):
+				print("NO LINK    :", l)
+				res += [l]
 			else:
-				print("    TODO", l)
-		s.text = '\n'.join(res)
+				rv = False
+				print("    TODO (!regex.match): ", l)
+		tr += ['\n'.join(res)]
+	newText = ''.join([str(x) for x in tr])
 
-	#print(parsed)
 	if not "==Regions==" in found and not "==Cities==" in found and not "==Municipalities==" in found:
-		return ["!Missing Regions/Cities/Municipalities"]
-	return True
+		return False, ["!Missing Regions/Cities/Municipalities"]
+	return rv, newText
 
 def processPage(title):
 	failures = []
@@ -61,17 +97,17 @@ def processPage(title):
 		raw = open(title).read()
 	else:
 		page = pywikibot.Page(site, title)
-		raw = raw
+		raw = page.text
 	parsed = mwparserfromhell.parse(raw)
 
-	err = transform(parsed)
-	if err != []:
+	err, newText = transform(parsed)
+	if err != True:
+		print('%s errors:\n\t%s' % (title, '\t\n'.join(newText)))
 		return err
 	
 	commit = True
 	if checkCommits:
 		# show diff, filter out most-likely-correct changes
-		newText = str(parsed)
 		open('f.1', 'w').write(raw)
 		open('f.2', 'w').write(newText)
 		subprocess.call("diff -pdau f.1 f.2 | grep -v '^[-+][-+][-+] f\.[12]'| grep '^[+-]' > f.diff", shell=True)
@@ -84,10 +120,12 @@ def processPage(title):
 			subprocess.call("kdiff3 f.1 f.2", shell=True)
 			commit = (input("Enter 'ok' to upload...") == 'ok')
 
-	commit = False
+	#commit = False
 	if commit:
 		page.text = newText
-		page.save("Convert cities/regions to templates", botflag = True)
+		page.save("transform city-like links to markers", botflag = True)
+	else:
+		open(title + ".new", 'w').write(newText)
 	return failures
 
 def processList(cat):
