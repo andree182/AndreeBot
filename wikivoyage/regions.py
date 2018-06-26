@@ -23,15 +23,20 @@ site = pywikibot.Site("en", "wikivoyage")
 def refToWDID(article):
 	''' get wikidata for the ref '''
 
-	article = str(article)	
+	article = str(article).strip()
 	if article.startswith('[['):
 		article = re.match("\[\[(?P<ref>[^\]]*)\]\].*", article).group("ref")
 
 	if ('|' in article):
 		article = article[:article.index('|')]
 
+	if '#' in article:
+		# avoid subsections, it's not the right wikidata ID
+		return ''
+
 	page = pywikibot.Page(site, article)
 	if page.isRedirectPage():
+		print("!!!!!!!!!!!!!!!!!!!!! REDIRECT: %s" % article)
 		page = page.getRedirectTarget()
 	if page.pageid != 0:
 		return pywikibot.ItemPage.fromPage(page).getID()
