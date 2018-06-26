@@ -20,8 +20,60 @@ botName = "AndreeBot"
 
 site = pywikibot.Site("en", "wikivoyage")
 
+def refToWDID(article):
+	''' get wikidata for the ref '''
+
+	article = str(article)	
+	if article.startswith('[['):
+		article = re.match("\[\[(?P<ref>[^\]]*)\]\].*", article).group("ref")
+
+	if ('|' in article):
+		article = article[:article.index('|')]
+
+	page = pywikibot.Page(site, article)
+	if page.isRedirectPage():
+		page = page.getRedirectTarget()
+	if page.pageid != 0:
+		return pywikibot.ItemPage.fromPage(page).getID()
+	return ''
+
+def addMarkerWikidata(parsed):
+	# if there are city markers already, just without wikidata...
+	for template in parsed.filter_templates():
+		if (template.name.strip().lower() == "marker" or template.name.strip().lower() == "listing") and \
+			template.has_param("type") and \
+			(template.get("type").value.lower().strip() == "city" or template.get("type").value.lower().strip() == "vicinity") and \
+			(not template.has_param("wikidata") or template.get("wikidata").value.strip() == ''):
+				wdid = refToWDID(template.get("name").value)
+				if wdid != '':
+					template.add('wikidata', wdid)
+
+def addRegionShapes(parsed):
+	''' if there's regionlist, but no geoshapes yet... '''
+	if not [t for t in parsed.filter_templates() if t.name.lower().strip() == "regionlist"] or \
+		[t for t in parsed.filter_templates() if t.name.lower().strip() == "mapshape" and t.has("type") and t.get("type").value == "geoshape"]:
+			return
+
+	newRegionshapes = []
+	for t in parsed.filter_templates():
+		if not t.name.lower().strip() == "regionlist":
+			continue
+
+		for i in range(1, 100): # :-)
+			if t.has("region%dname" % i):
+				wdID = refToWDID(t.get('region%dname' % i).value)
+				newRegionshapes += ["{{mapshape|type=geoshape|fill=%s|title=%s|wikidata=%s}}\n" %
+					(t.get('region%dcolor' % i).value.strip(), t.get('region%dname' % i).value.strip(), wdID)]
+
+	if newRegionshapes:
+		for s in parsed.get_sections(levels=[2], include_lead = True):
+			if s.filter_headings() != [] and \
+				(s.filter_headings()[0] == "==Regions==" or s.filter_headings()[0] == "==Provinces=="):
+				s.append(''.join(newRegionshapes))
+				break
+
 def transform(parsed):
-	supported_headings = ["==Regions==", "==Cities==", "==Municipalities==", "==Other destinations=="]
+	supported_headings = ["==Regions==", "==Provinces==", "==Cities==", "==Municipalities==", "==Other destinations=="]
 	found = {}
 	hdrs = parsed.filter_headings()
 	match = "^(?P<prefix>( *\* *))(\[\[(?P<ref>[^\]]*)\]\]|(?P<name>[^&—\-\.]*))((?P<sep>( *([—\-\.]|&mdash;|) *))(?P<desc>.*)){0,1}$"
@@ -61,15 +113,7 @@ def transform(parsed):
 				else:
 					wdID = ''
 				if m.group("ref") and wdID == '':
-					# get wikidata for the ref
-					article = m.group("ref")
-					if ('|' in article):
-						article = article[:article.index('|')]
-					page = pywikibot.Page(site, article)
-					if page.isRedirectPage():
-						page = page.getRedirectTarget()
-					if page.pageid != 0:
-						wdID = pywikibot.ItemPage.fromPage(page).getID()
+					wdID = refToWDID(m.group("ref"))
 				
 				res += ['%s{{marker%s|name=%s|wikidata=%s}}%s%s' % (
 					m.group("prefix"),
@@ -78,6 +122,9 @@ def transform(parsed):
 					m.group("desc") if m.group("desc") else '')]
 			elif m != None and m.group("name"):
 				print("NO LINK    :", l)
+				res += [l]
+			elif re.match('\[\[(Image|File):.*\]\]', l) or l.startswith('| ') or l.startswith('}}') or l.startswith("<!--"):
+				print("COPY    :", l)
 				res += [l]
 			else:
 				print("    ERROR (!regex.match) -> skiping section: ", l)
@@ -94,10 +141,12 @@ def transformRegions(parsed):
 	tr = []
 	rv = True
 	for s in parsed.get_sections(levels=[2], include_lead = True):
-		if s.filter_headings() == [] or \
-		   s.filter_headings()[0] not in ["==Regions=="]:
+		if (s.filter_headings() == []) or \
+		   (s.filter_headings()[0] not in ["==Regions=="]) or \
+		   ("{{regionlist" in str(s).lower()):
 			tr += [s]
-			continue
+			continue 
+			
 
 		tr += ["==Regions==\n"]
 		tr += ["{{Regionlist\n"]
@@ -109,8 +158,9 @@ def transformRegions(parsed):
 			if l.startswith('=='):
 				continue
 			if not re.match("^\* *\{\{marker.*", l):
-				print("Unknown stuff in region list:", l)
-				return True, str(parsed)
+				print("COPY    :", l)
+				tr += [l + "\n"]
+				continue
 			t = mwparserfromhell.parse(l).filter_templates()[0]
 
 			tr += ["|region%dname = %s\n|region%dcolor={{StdColor|t%d}}\n|region%ditems=\n|region%ddescription=\n\n" %
@@ -133,6 +183,7 @@ def processPage(title):
 		page = pywikibot.Page(site, title)
 		raw = page.text
 	parsed = mwparserfromhell.parse(raw)
+	addMarkerWikidata(parsed)
 
 	err, newText = transform(parsed)
 	if err != True:
@@ -140,6 +191,7 @@ def processPage(title):
 		return err
 
 	parsed = mwparserfromhell.parse(newText)
+	addRegionShapes(parsed)
 	err, newText = transformRegions(parsed)
 	if err != True:
 		print('%s errors:\n\n%s' % (title, newText))
@@ -208,6 +260,4 @@ if len(sys.argv) > 1:
 	for p in sys.argv[1:]:
 		processPage(p)
 else:
-	# processList("Outline_regions")
-	processPage("Altiplano_(Bolivia)")
-	# processPage("Metropolitan_Naples")
+	processList("Outline_regions")
