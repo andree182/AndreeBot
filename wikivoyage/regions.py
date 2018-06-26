@@ -81,7 +81,7 @@ def transform(parsed):
 	supported_headings = ["==Regions==", "==Provinces==", "==Cities==", "==Municipalities==", "==Other destinations=="]
 	found = {}
 	hdrs = parsed.filter_headings()
-	match = "^(?P<prefix>( *\* *))(\[\[(?P<ref>[^\]]*)\]\]|(?P<name>[^&—\-\.]*))((?P<sep>( *([—\-\.]|&mdash;|) *))(?P<desc>.*)){0,1}$"
+	match = "^(?P<prefix>( *:*\* *))(\[\[(?P<ref>[^\]]*)\]\]|(?P<name>[^&—\-\.]*))((?P<sep>( *([—\-\.]|&mdash;|) *))(?P<desc>.*)){0,1}$"
 	rv = True
 
 	nomap = not '{{mapframe' in str(parsed).lower()
@@ -151,10 +151,9 @@ def transformRegions(parsed):
 		   ("{{regionlist" in str(s).lower()):
 			tr += [s]
 			continue 
-			
 
+		hasRegionEntry = False
 		tr += ["==Regions==\n"]
-		tr += ["{{Regionlist\n"]
 		tr2 = []
 		idx = 1
 		for l in str(s).split('\n'):
@@ -168,12 +167,17 @@ def transformRegions(parsed):
 				continue
 			t = mwparserfromhell.parse(l).filter_templates()[0]
 
+			if not hasRegionEntry:
+				tr += ["{{Regionlist\n"]
+				hasRegionEntry = True
+
 			tr += ["|region%dname = %s\n|region%dcolor={{StdColor|t%d}}\n|region%ditems=\n|region%ddescription=\n\n" %
 					(idx, t.get('name').value, idx, idx, idx, idx)]
 			tr2 += ["{{mapshape|type=geoshape|fill={{StdColor|t%d}}|title=%s|wikidata=%s}}\n" %
 					(idx, t.get('name').value, t.get('wikidata').value)]
 			idx += 1
-		tr += ["}}\n"]
+		if hasRegionEntry:
+			tr += ["}}\n"]
 		tr += tr2
 
 	return rv, ''.join([str(x) for x in tr])
