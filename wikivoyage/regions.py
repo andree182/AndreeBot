@@ -269,4 +269,6 @@ if len(sys.argv) > 1:
 	for p in sys.argv[1:]:
 		processPage(p)
 else:
-	processList("Outline_regions")
+	# processList("Outline_regions")
+	processList("Region_markers_without_wikidata")
+
