@@ -23,9 +23,15 @@ site = pywikibot.Site("en", "wikivoyage")
 def refToWDID(article):
 	''' get wikidata for the ref '''
 
+	if fakeWID:
+		return 'Q1234'
+
 	article = str(article).strip()
 	if article.startswith('[['):
 		article = re.match("\[\[(?P<ref>[^\]]*)\]\].*", article).group("ref")
+	elif article.startswith('['):
+		# skip urls
+		return ''
 
 	if ('|' in article):
 		article = article[:article.index('|')]
@@ -38,11 +44,16 @@ def refToWDID(article):
 	if page.isRedirectPage():
 		print("!!!!!!!!!!!!!!!!!!!!! REDIRECT: %s" % article)
 		page = page.getRedirectTarget()
+		return ''
 	if page.pageid != 0:
+		if not pywikibot.ItemPage.fromPage(page):
+			return ''
 		return pywikibot.ItemPage.fromPage(page).getID()
 	return ''
 
 def addMarkerWikidata(parsed):
+	not_matched_to_wd = 0
+
 	# if there are city markers already, just without wikidata...
 	for template in parsed.filter_templates():
 		if (template.name.strip().lower() == "marker" or template.name.strip().lower() == "listing") and \
@@ -52,6 +63,10 @@ def addMarkerWikidata(parsed):
 				wdid = refToWDID(template.get("name").value)
 				if wdid != '':
 					template.add('wikidata', wdid)
+				else:
+					not_matched_to_wd += 1
+
+	return not_matched_to_wd
 
 def addRegionShapes(parsed):
 	''' if there's regionlist, but no geoshapes yet... '''
@@ -77,31 +92,48 @@ def addRegionShapes(parsed):
 				s.append(''.join(newRegionshapes))
 				break
 
+def isCityHeading(h):
+	if not h.strip().startswith('==') or not h.strip().endswith('=='):
+		return False
+
+	return h.strip('= ').lower() in [
+		"cities", "towns", "cities and towns",
+		"cities and villages", "towns and villages",
+		"cities, towns and villages", "cities, towns, villages"]
+
 def transform(parsed):
-	supported_headings = ["==Regions==", "==Provinces==", "==Cities==", "==Municipalities==", "==Other destinations=="]
-	found = {}
+	supported_headings = ["==Other destinations==", "==Regions==", "==Provinces==", "==Municipalities=="]
+	supported_article = False
 	hdrs = parsed.filter_headings()
 	match = "^(?P<prefix>( *:*\* *))(\[\[(?P<ref>[^\]]*)\]\]|(?P<name>[^&—\-\.]*))((?P<sep>( *([—\-\.]|&mdash;|) *))(?P<desc>.*)){0,1}$"
 	rv = True
+	not_matched_to_wd = 0
 
 	nomap = not '{{mapframe' in str(parsed).lower()
 	tr = []
 	for s in parsed.get_sections(levels=[2], include_lead = True):
-		if s.filter_headings() == [] or \
-		   s.filter_headings()[0] not in supported_headings:
+		if s.filter_headings() == []:
 			tr += [s]
 			continue
-		found[str(s.filter_headings()[0])] = True
+		title = str(s.filter_headings()[0])
+		# print("    ...%s" % (title))
+		if (title not in supported_headings) and not isCityHeading(title):
+			tr += [s]
+			continue
+		if title != supported_headings[0]:
+			# Other than ^^^^, any other heading suffices for us...
+			supported_article = True
 		
 		res = []
 		for l in str(s).split('\n'):
 			if l.startswith('==') or l == '':
 				res += [l]
 
-				if l.startswith('==') and 'Cities' in l:
+				if isCityHeading(l):
 					markerType = '|type=city'
 					if nomap:
 						res += ["{{mapframe}}"]
+						nomap = False
 				elif l.startswith('=='):
 					markerType = ''
 				
@@ -112,13 +144,11 @@ def transform(parsed):
 				if "[[" in m.group("desc"):
 					print("MULTI-LINK?:", l)
 				title = "[[" + m.group("ref") + "]]" if m.group("ref") else m.group("name")
-				
-				if fakeWID:
-					wdID = 'Q1234'
-				else:
-					wdID = ''
-				if m.group("ref") and wdID == '':
+
+				if m.group("ref"):
 					wdID = refToWDID(m.group("ref"))
+					if wdID == '':
+						not_matched_to_wd += 1
 				
 				res += ['%s{{marker%s|name=%s|wikidata=%s}}%s%s' % (
 					m.group("prefix"),
@@ -138,9 +168,9 @@ def transform(parsed):
 
 		tr += ['\n'.join(res)]
 
-	if not "==Regions==" in found and not "==Cities==" in found and not "==Municipalities==" in found:
-		return False, ["!Missing Regions/Cities/Municipalities"]
-	return rv, ''.join([str(x) for x in tr])
+	if not supported_article:
+		return False, not_matched_to_wd, ["!Missing Regions/Cities/Municipalities"]
+	return rv, not_matched_to_wd, ''.join([str(x) for x in tr])
 
 def transformRegions(parsed):
 	tr = []
@@ -192,19 +222,19 @@ def processPage(title):
 		page = pywikibot.Page(site, title)
 		raw = page.text
 	parsed = mwparserfromhell.parse(raw)
-	addMarkerWikidata(parsed)
+	not_matched_to_wd1 = addMarkerWikidata(parsed)
 
-	err, newText = transform(parsed)
+	err, not_matched_to_wd2, newText = transform(parsed)
 	if err != True:
 		print('%s errors:\n\n%s' % (title, newText))
-		return err
+		return newText
 
 	parsed = mwparserfromhell.parse(newText)
 	addRegionShapes(parsed)
 	err, newText = transformRegions(parsed)
 	if err != True:
 		print('%s errors:\n\n%s' % (title, newText))
-		return err
+		return newText
 	
 	commit = True
 	if checkCommits:
@@ -227,6 +257,8 @@ def processPage(title):
 		page.save("transform city-like links to markers", botflag = True)
 	else:
 		open(title + ".new", 'w').write(newText)
+	if not_matched_to_wd1 + not_matched_to_wd2 != 0:
+		failures += [str(not_matched_to_wd1 + not_matched_to_wd2) + " red links"]
 	return failures
 
 def processList(cat):
@@ -267,7 +299,7 @@ def processList(cat):
 
 if len(sys.argv) > 1:
 	for p in sys.argv[1:]:
-		processPage(p)
+		print(p, processPage(p))
 else:
 	# processList("Outline_regions")
 	processList("Region_markers_without_wikidata")
