@@ -17,6 +17,8 @@ import re
 checkCommits = True
 fakeWID = False
 botName = "AndreeBot"
+forceMarkers = False
+processAllMarkers = False
 
 site = pywikibot.Site("en", "wikivoyage")
 
@@ -32,6 +34,9 @@ def refToWDID(article):
 	elif article.startswith('['):
 		# skip urls
 		return ''
+	if '[[' in article:
+		# some complicated link, skip...
+		return ''
 
 	if ('|' in article):
 		article = article[:article.index('|')]
@@ -46,9 +51,10 @@ def refToWDID(article):
 		page = page.getRedirectTarget()
 		return ''
 	if page.pageid != 0:
-		if not pywikibot.ItemPage.fromPage(page):
+		try:
+			return pywikibot.ItemPage.fromPage(page).getID()
+		except:
 			return ''
-		return pywikibot.ItemPage.fromPage(page).getID()
 	return ''
 
 def addMarkerWikidata(parsed):
@@ -57,8 +63,10 @@ def addMarkerWikidata(parsed):
 	# if there are city markers already, just without wikidata...
 	for template in parsed.filter_templates():
 		if (template.name.strip().lower() == "marker" or template.name.strip().lower() == "listing") and \
-			template.has_param("type") and \
-			(template.get("type").value.lower().strip() == "city" or template.get("type").value.lower().strip() == "vicinity") and \
+			processAllMarkers or (
+				template.has_param("type") and \
+				(template.get("type").value.lower().strip() == "city" or template.get("type").value.lower().strip() == "vicinity")
+			) and \
 			(not template.has_param("wikidata") or template.get("wikidata").value.strip() == ''):
 				wdid = refToWDID(template.get("name").value)
 				if wdid != '':
@@ -92,30 +100,32 @@ def addRegionShapes(parsed):
 				s.append(''.join(newRegionshapes))
 				break
 
+cityHeadings = ["cities", "towns", "cities and towns",
+		"cities and villages", "towns and villages",
+		"cities, towns and villages", "cities, towns, villages"]
+
+regionHeadings = ["==regions==", "==provinces==", "==municipalities=="]
+
 def isCityHeading(h):
 	if not h.strip().startswith('==') or not h.strip().endswith('=='):
 		return False
 
-	return h.strip('= ').lower() in [
-		"cities", "towns", "cities and towns",
-		"cities and villages", "towns and villages",
-		"cities, towns and villages", "cities, towns, villages"]
+	return h.strip('= ') in cityHeadings
 
 def transform(parsed):
-	supported_headings = ["==Other destinations==", "==Regions==", "==Provinces==", "==Municipalities=="]
+	supported_headings = ["==other destinations=="] + regionHeadings
 	supported_article = False
 	hdrs = parsed.filter_headings()
-	match = "^(?P<prefix>( *:*\* *))(\[\[(?P<ref>[^\]]*)\]\]|(?P<name>[^&—\-\.]*))((?P<sep>( *([—\-\.]|&mdash;|) *))(?P<desc>.*)){0,1}$"
+	match = "^(?P<prefix>( *:*\*+ *))((''')?\[\[(?P<ref>[^\]]*)\]\](''')?|(?P<name>[^&—\-\.]*))((?P<sep>( *([—\-\.]|&mdash;|) *))(?P<desc>.*)){0,1}$"
 	rv = True
 	not_matched_to_wd = 0
 
-	nomap = not '{{mapframe' in str(parsed).lower()
 	tr = []
 	for s in parsed.get_sections(levels=[2], include_lead = True):
 		if s.filter_headings() == []:
 			tr += [s]
 			continue
-		title = str(s.filter_headings()[0])
+		title = str(s.filter_headings()[0]).lower()
 		# print("    ...%s" % (title))
 		if (title not in supported_headings) and not isCityHeading(title):
 			tr += [s]
@@ -129,11 +139,8 @@ def transform(parsed):
 			if l.startswith('==') or l == '':
 				res += [l]
 
-				if isCityHeading(l):
+				if isCityHeading(l.lower()):
 					markerType = '|type=city'
-					if nomap:
-						res += ["{{mapframe}}"]
-						nomap = False
 				elif l.startswith('=='):
 					markerType = ''
 				
@@ -162,9 +169,13 @@ def transform(parsed):
 				print("COPY    :", l)
 				res += [l]
 			else:
-				print("    ERROR (!regex.match) -> skiping section: ", l)
-				res = str(s).split('\n')
-				break
+				if forceMarkers:
+					res += [l]
+					continue
+				else:
+					print("    ERROR (!regex.match) -> skiping section: ", l)
+					res = str(s).split('\n')
+					break
 
 		tr += ['\n'.join(res)]
 
@@ -177,28 +188,24 @@ def transformRegions(parsed):
 	rv = True
 	for s in parsed.get_sections(levels=[2], include_lead = True):
 		if (s.filter_headings() == []) or \
-		   (s.filter_headings()[0] not in ["==Regions=="]) or \
+		   (s.filter_headings()[0].lower() not in ["==regions=="]) or \
 		   ("{{regionlist" in str(s).lower()):
 			tr += [s]
 			continue 
 
 		hasRegionEntry = False
-		tr += ["==Regions==\n"]
+		tr += ["==Regions=="]
 		tr2 = []
 		idx = 1
-		for l in str(s).split('\n'):
-			if l == '':
-				continue
-			if l.startswith('=='):
-				continue
+		for l in str(s).split('\n')[1:]:
 			if not re.match("^\* *\{\{marker.*", l):
 				print("COPY    :", l)
-				tr += [l + "\n"]
+				tr += ['\n' + l]
 				continue
 			t = mwparserfromhell.parse(l).filter_templates()[0]
 
 			if not hasRegionEntry:
-				tr += ["{{Regionlist\n"]
+				tr += ["\n{{Regionlist\n"]
 				hasRegionEntry = True
 
 			tr += ["|region%dname = %s\n|region%dcolor={{StdColor|t%d}}\n|region%ditems=\n|region%ddescription=\n\n" %
@@ -212,6 +219,21 @@ def transformRegions(parsed):
 
 	return rv, ''.join([str(x) for x in tr])
 
+def maybeAddMapframe(newText):
+	order = regionHeadings + ['=='+x+'==' for x in cityHeadings]
+
+	lowerNewText = newText.lower()
+
+	if ('{{marker' in lowerNewText or '{{listing' in lowerNewText) and \
+			not '{{mapframe' in lowerNewText:
+		for s in order:
+			if s in lowerNewText:
+				idx = lowerNewText.index(s)
+				return newText[:idx + len(s)] + "\n{{mapframe}}\n" + newText[idx + len(s):]
+
+	return newText
+			
+
 def processPage(title):
 	failures = []
 	print("\nProcessing %s..." %(title))
@@ -221,6 +243,9 @@ def processPage(title):
 	else:
 		page = pywikibot.Page(site, title)
 		raw = page.text
+	if "country}}" in raw:
+		return ["Country article"]
+
 	parsed = mwparserfromhell.parse(raw)
 	not_matched_to_wd1 = addMarkerWikidata(parsed)
 
@@ -235,8 +260,10 @@ def processPage(title):
 	if err != True:
 		print('%s errors:\n\n%s' % (title, newText))
 		return newText
+
+	newText = maybeAddMapframe(newText)
 	
-	commit = True
+	commit = True and not fakeWID
 	if checkCommits:
 		# show diff, filter out most-likely-correct changes
 		open('f.1', 'w').write(raw)
@@ -245,16 +272,20 @@ def processPage(title):
 		diff = open('f.diff').read().split('\n')
 		diff = list(filter(lambda l: l.strip() != '-}}', diff))
 		diff = list(filter(lambda l: not l.startswith('+| wikidata=') and not l.startswith('+| wikidata ='), diff))
+		diff = list(filter(lambda l: re.search("-.*{{marker.*}}", l.lower()) == None, diff))
+		diff = list(filter(lambda l: re.search("\+.*{{marker.*wikidata=.*}}", l.lower()) == None, diff))
+		diff = list(filter(lambda l: l!='+{{mapframe}}', diff))
 		diff = list(filter(lambda l: l!='', diff))
+		diff = list(filter(lambda l: l!='-', diff))
 
 		if diff != []:
-			subprocess.call("kdiff3 f.1 f.2", shell=True)
-			commit = (input("Enter 'ok' to upload...") == 'ok')
+			subprocess.call("(diff -pdau f.1 f.2|colordiff; echo -e '\nXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\nXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\nXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n'; wdiff f.1 f.2 |colordiff)|less -R", shell=True)
+			commit = (input("Enter 'xxx' to skip upload...") != 'xxx')
 
-	#commit = False
+	# commit = False
 	if commit:
 		page.text = newText
-		page.save("transform city-like links to markers", botflag = True)
+		page.save("transform city-like links to markers and/or add wikidata", botflag = True)
 	else:
 		open(title + ".new", 'w').write(newText)
 	if not_matched_to_wd1 + not_matched_to_wd2 != 0:
@@ -296,6 +327,13 @@ def processList(cat):
 			if pywikibot.Page(site, "User_talk:" + botName).getVersionHistory()[0].timestamp > timestamp:
 				print("Got kicked by someone!")
 				break
+
+while len(sys.argv) > 1 and sys.argv[1].startswith('--'):
+	if sys.argv[1] == '--force-markers':
+		forceMarkers = True
+	if sys.argv[1] == '--all-markers':
+		processAllMarkers = True
+	sys.argv = [sys.argv[0]] + sys.argv[2:]
 
 if len(sys.argv) > 1:
 	for p in sys.argv[1:]:
