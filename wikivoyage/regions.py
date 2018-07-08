@@ -13,16 +13,22 @@ import binascii
 import os
 import sys
 import re
+import unicodedata
+import Levenshtein
 
 checkCommits = True
 fakeWID = False
 botName = "AndreeBot"
 forceMarkers = False
 processAllMarkers = False
+countriesToo = False
+forceProcessing = False
+silent = True
+listFrom = ''
 
 site = pywikibot.Site("en", "wikivoyage")
 
-def refToWDID(article):
+def refToWDID(article, parent = None):
 	''' get wikidata for the ref '''
 
 	if fakeWID:
@@ -47,9 +53,17 @@ def refToWDID(article):
 
 	page = pywikibot.Page(site, article)
 	if page.isRedirectPage():
-		print("!!!!!!!!!!!!!!!!!!!!! REDIRECT: %s" % article)
 		page = page.getRedirectTarget()
-		return ''
+		if '#' in page.title():
+			return ''
+		if page.title() == parent:
+			return ''
+		if (unicodedata.normalize('NFKD', article).encode('ASCII', 'ignore') !=
+		   unicodedata.normalize('NFKD', page.title()).encode('ASCII', 'ignore')) and \
+		   (Levenshtein.distance(article, page.title()) >= 3) and \
+		    (not article in page.title() and not page.title() in article):
+			if silent or (not silent and (input("!!! REDIRECT: %s -> %s ... OK (xxx == not)?" % (article, page.title())) == 'xxx')):
+				return ''
 	if page.pageid != 0:
 		try:
 			return pywikibot.ItemPage.fromPage(page).getID()
@@ -57,7 +71,7 @@ def refToWDID(article):
 			return ''
 	return ''
 
-def addMarkerWikidata(parsed):
+def addMarkerWikidata(parsed, parent):
 	not_matched_to_wd = 0
 
 	# if there are city markers already, just without wikidata...
@@ -68,7 +82,11 @@ def addMarkerWikidata(parsed):
 				(template.get("type").value.lower().strip() == "city" or template.get("type").value.lower().strip() == "vicinity")
 			) and \
 			(not template.has_param("wikidata") or template.get("wikidata").value.strip() == ''):
-				wdid = refToWDID(template.get("name").value)
+				if template.has_param("name"):
+					n = "name"
+				else:
+					n = "Name"
+				wdid = refToWDID(template.get(n).value, parent)
 				if wdid != '':
 					template.add('wikidata', wdid)
 				else:
@@ -90,21 +108,24 @@ def addRegionShapes(parsed):
 		for i in range(1, 100): # :-)
 			if t.has("region%dname" % i):
 				wdID = refToWDID(t.get('region%dname' % i).value)
+				if not wdID:
+					return "Missing wikidata for an region"
 				newRegionshapes += ["{{mapshape|type=geoshape|fill=%s|title=%s|wikidata=%s}}\n" %
 					(t.get('region%dcolor' % i).value.strip(), t.get('region%dname' % i).value.strip(), wdID)]
 
 	if newRegionshapes:
 		for s in parsed.get_sections(levels=[2], include_lead = True):
 			if s.filter_headings() != [] and \
-				(s.filter_headings()[0] == "==Regions==" or s.filter_headings()[0] == "==Provinces=="):
+				(s.filter_headings()[0].lower() in ["==regions==", "==provinces==", "==states==", "==islands==", "==counties=="]):
 				s.append(''.join(newRegionshapes))
 				break
+	return True
 
 cityHeadings = ["cities", "towns", "cities and towns",
 		"cities and villages", "towns and villages",
 		"cities, towns and villages", "cities, towns, villages"]
 
-regionHeadings = ["==regions==", "==provinces==", "==municipalities=="]
+regionHeadings = ["==regions==", "==provinces==", "==municipalities==", "==districts==", "==counties=="]
 
 def isCityHeading(h):
 	if not h.strip().startswith('==') or not h.strip().endswith('=='):
@@ -114,7 +135,7 @@ def isCityHeading(h):
 
 def transform(parsed):
 	supported_headings = ["==other destinations=="] + regionHeadings
-	supported_article = False
+	supported_article = forceProcessing
 	hdrs = parsed.filter_headings()
 	match = "^(?P<prefix>( *:*\*+ *))((''')?\[\[(?P<ref>[^\]]*)\]\](''')?|(?P<name>[^&—\-\.]*))((?P<sep>( *([—\-\.]|&mdash;|) *))(?P<desc>.*)){0,1}$"
 	rv = True
@@ -188,13 +209,13 @@ def transformRegions(parsed):
 	rv = True
 	for s in parsed.get_sections(levels=[2], include_lead = True):
 		if (s.filter_headings() == []) or \
-		   (s.filter_headings()[0].lower() not in ["==regions=="]) or \
+		   (s.filter_headings()[0].lower() not in ["==regions==", "==districts==", "==counties=="]) or \
 		   ("{{regionlist" in str(s).lower()):
 			tr += [s]
 			continue 
 
 		hasRegionEntry = False
-		tr += ["==Regions=="]
+		tr += [s.filter_headings()[0]]
 		tr2 = []
 		idx = 1
 		for l in str(s).split('\n')[1:]:
@@ -202,14 +223,19 @@ def transformRegions(parsed):
 				print("COPY    :", l)
 				tr += ['\n' + l]
 				continue
+			print(l)
 			t = mwparserfromhell.parse(l).filter_templates()[0]
+			desc = ''
+			m = re.match(".*{{marker.*\|wikidata=Q[0-9]*}} *(&mdash;|-|–|—) *(?P<desc>(.*))$", l)
+			if m != None:
+				desc = m.group("desc")
 
 			if not hasRegionEntry:
 				tr += ["\n{{Regionlist\n"]
 				hasRegionEntry = True
 
-			tr += ["|region%dname = %s\n|region%dcolor={{StdColor|t%d}}\n|region%ditems=\n|region%ddescription=\n\n" %
-					(idx, t.get('name').value, idx, idx, idx, idx)]
+			tr += ["|region%dname = %s\n|region%dcolor={{StdColor|t%d}}\n|region%ditems=\n|region%ddescription=%s\n\n" %
+					(idx, t.get('name').value, idx, idx, idx, idx, desc)]
 			tr2 += ["{{mapshape|type=geoshape|fill={{StdColor|t%d}}|title=%s|wikidata=%s}}\n" %
 					(idx, t.get('name').value, t.get('wikidata').value)]
 			idx += 1
@@ -243,11 +269,11 @@ def processPage(title):
 	else:
 		page = pywikibot.Page(site, title)
 		raw = page.text
-	if "country}}" in raw:
+	if not countriesToo and "country}}" in raw:
 		return ["Country article"]
 
 	parsed = mwparserfromhell.parse(raw)
-	not_matched_to_wd1 = addMarkerWikidata(parsed)
+	not_matched_to_wd1 = addMarkerWikidata(parsed, title)
 
 	err, not_matched_to_wd2, newText = transform(parsed)
 	if err != True:
@@ -255,16 +281,22 @@ def processPage(title):
 		return newText
 
 	parsed = mwparserfromhell.parse(newText)
-	addRegionShapes(parsed)
+	err = addRegionShapes(parsed)
+	if err != True:
+		not_matched_to_wd3 = err
+	else:
+		not_matched_to_wd3 = None
 	err, newText = transformRegions(parsed)
 	if err != True:
 		print('%s errors:\n\n%s' % (title, newText))
 		return newText
+	if newText != str(parsed):
+		open("check.regions", "a").write("%s regionlist\n" % title)
 
 	newText = maybeAddMapframe(newText)
 	
 	commit = True and not fakeWID
-	if checkCommits:
+	if not silent and checkCommits:
 		# show diff, filter out most-likely-correct changes
 		open('f.1', 'w').write(raw)
 		open('f.2', 'w').write(newText)
@@ -274,6 +306,8 @@ def processPage(title):
 		diff = list(filter(lambda l: not l.startswith('+| wikidata=') and not l.startswith('+| wikidata ='), diff))
 		diff = list(filter(lambda l: re.search("-.*{{marker.*}}", l.lower()) == None, diff))
 		diff = list(filter(lambda l: re.search("\+.*{{marker.*wikidata=.*}}", l.lower()) == None, diff))
+		diff = list(filter(lambda l: re.match("-}} +(&mdash;|-|–|—).*", l.lower()) == None, diff))
+		diff = list(filter(lambda l: re.match("\+|wikidata=Q.*}} +(&mdash;|-|–|—).*", l.lower()) == None, diff))
 		diff = list(filter(lambda l: l!='+{{mapframe}}', diff))
 		diff = list(filter(lambda l: l!='', diff))
 		diff = list(filter(lambda l: l!='-', diff))
@@ -290,6 +324,8 @@ def processPage(title):
 		open(title + ".new", 'w').write(newText)
 	if not_matched_to_wd1 + not_matched_to_wd2 != 0:
 		failures += [str(not_matched_to_wd1 + not_matched_to_wd2) + " red links"]
+	if not_matched_to_wd3:
+		failures += [not_matched_to_wd3]
 	return failures
 
 def processList(cat):
@@ -316,6 +352,8 @@ def processList(cat):
 			continue
 		if a.title() in exceptions:
 			continue
+		if a.title() < listFrom:
+			continue
 		fails = processPage(a.title())
 		if fails != []:
 			exceptionsf.write("%s|%s\n" % (a.title(), ', '.join(fails)))
@@ -330,15 +368,27 @@ def processList(cat):
 
 while len(sys.argv) > 1 and sys.argv[1].startswith('--'):
 	if sys.argv[1] == '--force-markers':
+		silent = False
 		forceMarkers = True
 	if sys.argv[1] == '--all-markers':
+		silent = False
 		processAllMarkers = True
+	if sys.argv[1] == '--country':
+		silent = False
+		countriesToo = True
+	if sys.argv[1] == '--force':
+		silent = False
+		forceProcessing = True
+	if sys.argv[1] == '--from':
+		listFrom = sys.argv[2]
+		sys.argv = [sys.argv[0]] + sys.argv[2:]
 	sys.argv = [sys.argv[0]] + sys.argv[2:]
 
 if len(sys.argv) > 1:
+	silent = False
 	for p in sys.argv[1:]:
 		print(p, processPage(p))
 else:
 	# processList("Outline_regions")
-	processList("Region_markers_without_wikidata")
-
+	# processList("Region_markers_without_wikidata")
+	processList("Region_articles")
