@@ -206,7 +206,6 @@ def transform(parsed):
 
 def transformRegions(parsed):
 	tr = []
-	rv = True
 	for s in parsed.get_sections(levels=[2], include_lead = True):
 		if (s.filter_headings() == []) or \
 		   (s.filter_headings()[0].lower() not in ["==regions==", "==districts==", "==counties=="]) or \
@@ -238,24 +237,35 @@ def transformRegions(parsed):
 					(idx, t.get('name').value, idx, idx, idx, idx, desc)]
 			tr2 += ["{{mapshape|type=geoshape|fill={{StdColor|t%d}}|title=%s|wikidata=%s}}\n" %
 					(idx, t.get('name').value, t.get('wikidata').value)]
+			if not t.get('wikidata').value:
+				return False, "no wikidata for %s" % (t.get('name').value)
 			idx += 1
 		if hasRegionEntry:
 			tr += ["}}\n"]
 		tr += tr2
 
-	return rv, ''.join([str(x) for x in tr])
+	return True, ''.join([str(x) for x in tr])
 
-def maybeAddMapframe(newText):
+def maybeAddMapframe(newText, title):
 	order = regionHeadings + ['=='+x+'==' for x in cityHeadings]
 
 	lowerNewText = newText.lower()
 
 	if ('{{marker' in lowerNewText or '{{listing' in lowerNewText) and \
+			not re.search('regionmap= *[a-zA-Z0-9]', lowerNewText) and \
+			not re.search('staticmap= *[a-zA-Z0-9]', lowerNewText) and \
+			not re.search('\[\[image:.*map.*(png|jpg)', lowerNewText) and \
 			not '{{mapframe' in lowerNewText:
 		for s in order:
 			if s in lowerNewText:
 				idx = lowerNewText.index(s)
-				return newText[:idx + len(s)] + "\n{{mapframe}}\n" + newText[idx + len(s):]
+				rv = newText[:idx + len(s)] + "\n{{mapframe}}"
+				if newText[idx + len(s)] != '\n':
+					rv += '\n'
+				rv += newText[idx + len(s):]
+				return rv
+	else:
+		open("pages.with_static_maps", "a").write("%s\n" % title)
 
 	return newText
 			
@@ -293,7 +303,7 @@ def processPage(title):
 	if newText != str(parsed):
 		open("check.regions", "a").write("%s regionlist\n" % title)
 
-	newText = maybeAddMapframe(newText)
+	newText = maybeAddMapframe(newText, title)
 	
 	commit = True and not fakeWID
 	if not silent and checkCommits:
@@ -379,6 +389,8 @@ while len(sys.argv) > 1 and sys.argv[1].startswith('--'):
 	if sys.argv[1] == '--force':
 		silent = False
 		forceProcessing = True
+	if sys.argv[1] == '--nosilent':
+		silent = False
 	if sys.argv[1] == '--from':
 		listFrom = sys.argv[2]
 		sys.argv = [sys.argv[0]] + sys.argv[2:]
