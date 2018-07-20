@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 
-# Fixes pages in Category:Listing_with_Wikipedia_link_but_not_Wikidata_link
-# For listings where wikipedia is specified, but no wikidata, wikidata is
-# added.
+# For cities/other destinations: converts [[xxx]] to markers 
+# For regions: Adds {{regionlist}}
+# Adds mapframe if there's no map yet, yet there are markers
 
 import pywikibot
 from pywikibot import pagegenerators as pg
